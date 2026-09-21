@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>X帖子采集器</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header>
+        <div>
+          <h1>X帖子采集器</h1>
+          <p class="muted">Markdown版·图片本地嵌入·v0.1.1</p>
+        </div>
+        <span id="statusBadge" class="badge idle">未开始</span>
+      </header>
+
+      <section class="card">
+        <h2>保存目录</h2>
+        <button id="chooseDirectory" class="secondary">选择目录</button>
+        <p id="directoryLabel" class="path">尚未选择目录</p>
+        <p class="hint">每条帖子会保存为Markdown，图片下载到media目录并嵌入Markdown。关闭侧栏后，后台最多缓存5000条等待写入。</p>
+      </section>
+
+      <section class="card controls">
+        <h2>采集控制</h2>
+        <div class="button-row">
+          <button id="start" class="primary">开始采集</button>
+          <button id="pause" class="secondary">暂停</button>
+          <button id="stop" class="danger">停止</button>
+        </div>
+        <label class="check-row"><input id="autoScroll" type="checkbox" /> 自动滚动当前标签页</label>
+        <label class="field-row">滚动间隔（毫秒）<input id="scrollInterval" type="number" min="800" max="10000" step="100" value="1500" /></label>
+        <label class="field-row">自动滚动标签页<select id="targetTab"></select></label>
+      </section>
+
+      <section class="card stats">
+        <h2>当前会话</h2>
+        <div class="stat-grid">
+          <div><strong id="found">0</strong><span>发现</span></div>
+          <div><strong id="saved">0</strong><span>已保存</span></div>
+          <div><strong id="duplicate">0</strong><span>重复</span></div>
+          <div><strong id="queued">0</strong><span>待写入</span></div>
+          <div><strong id="errors">0</strong><span>错误</span></div>
+        </div>
+      </section>
+
+      <section class="card log-card">
+        <h2>运行日志</h2>
+        <pre id="log" aria-live="polite">等待开始。</pre>
+      </section>
+    </main>
+    <script src="shared/markdown.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
