@@ -11,7 +11,7 @@
       <header>
         <div>
           <h1>X帖子采集器</h1>
-          <p class="muted">Markdown版·图片本地嵌入·v0.1.1</p>
+          <p class="muted">Markdown版·图片本地嵌入·v0.2.0</p>
         </div>
         <span id="statusBadge" class="badge idle">未开始</span>
       </header>
@@ -33,6 +33,10 @@
         <label class="check-row"><input id="autoScroll" type="checkbox" /> 自动滚动当前标签页</label>
         <label class="field-row">滚动间隔（毫秒）<input id="scrollInterval" type="number" min="800" max="10000" step="100" value="1500" /></label>
         <label class="field-row">自动滚动标签页<select id="targetTab"></select></label>
+        <label class="check-row"><input id="autoRetry" type="checkbox" checked /> 遇到限流错误自动点击 Retry</label>
+        <label class="field-row">重试首次等待（秒）<input id="retryBase" type="number" min="3" max="600" step="1" value="30" /></label>
+        <label class="field-row">重试最大等待（秒）<input id="retryMax" type="number" min="10" max="3600" step="5" value="360" /></label>
+        <div class="button-row"><button id="simulateRateLimit" class="secondary">自测：模拟限流并验证自动重试</button><button id="captureDiagnostics" class="secondary">诊断：捕获当前限流信息</button></div>
       </section>
 
       <section class="card stats">
@@ -43,6 +47,7 @@
           <div><strong id="duplicate">0</strong><span>重复</span></div>
           <div><strong id="queued">0</strong><span>待写入</span></div>
           <div><strong id="errors">0</strong><span>错误</span></div>
+          <div><strong id="retries">0</strong><span>重试</span></div>
         </div>
       </section>
 
@@ -52,6 +57,7 @@
       </section>
     </main>
     <script src="shared/markdown.js"></script>
+    <script src="shared/retry.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

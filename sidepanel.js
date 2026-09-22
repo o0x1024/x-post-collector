@@ -13,13 +13,19 @@ const ui = {
   autoScroll: document.querySelector("#autoScroll"),
   scrollInterval: document.querySelector("#scrollInterval"),
   targetTab: document.querySelector("#targetTab"),
+  autoRetry: document.querySelector("#autoRetry"),
+  retryBase: document.querySelector("#retryBase"),
+  retryMax: document.querySelector("#retryMax"),
+  simulateRateLimit: document.querySelector("#simulateRateLimit"),
+  captureDiagnostics: document.querySelector("#captureDiagnostics"),
   statusBadge: document.querySelector("#statusBadge"),
   log: document.querySelector("#log"),
   found: document.querySelector("#found"),
   saved: document.querySelector("#saved"),
   duplicate: document.querySelector("#duplicate"),
   queued: document.querySelector("#queued"),
-  errors: document.querySelector("#errors")
+  errors: document.querySelector("#errors"),
+  retries: document.querySelector("#retries")
 };
 
 let directoryHandle = null;
@@ -33,6 +39,54 @@ const imageHostAllowlist = new Set(["pbs.twimg.com", "video.twimg.com", "abs.twi
 function log(message) {
   const line = `[${new Date().toLocaleTimeString()}] ${message}`;
   ui.log.textContent = `${line}\n${ui.log.textContent}`.slice(0, 4000);
+}
+
+const SETTINGS_KEY = "xpcSettings";
+
+function collectRetrySettings() {
+  return XPostRetry.normalizeSettings({
+    autoRetry: ui.autoRetry.checked,
+    retryBaseSec: Number(ui.retryBase.value),
+    retryMaxSec: Number(ui.retryMax.value)
+  });
+}
+
+async function loadRetrySettings() {
+  const stored = await chrome.storage.local.get(SETTINGS_KEY);
+  const settings = XPostRetry.normalizeSettings(stored?.[SETTINGS_KEY]);
+  ui.autoRetry.checked = settings.autoRetry;
+  ui.retryBase.value = String(settings.retryBaseSec);
+  ui.retryMax.value = String(settings.retryMaxSec);
+}
+
+async function saveRetrySettings() {
+  const settings = collectRetrySettings();
+  ui.autoRetry.checked = settings.autoRetry;
+  ui.retryBase.value = String(settings.retryBaseSec);
+  ui.retryMax.value = String(settings.retryMaxSec);
+  await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  await chrome.runtime.sendMessage({ type: "SET_RETRY_SETTINGS", settings }).catch(() => {});
+  log(`自动重试设置已保存：${settings.autoRetry ? "已开启" : "已关闭"}，首次等待${settings.retryBaseSec}秒，最大等待${settings.retryMaxSec}秒。`);
+}
+
+async function writeDiagnosticFile(name, content) {
+  if (!directoryHandle) return "";
+  if (!(await verifyPermission(directoryHandle, false))) return "";
+  const diagnosticsDirectory = await directoryHandle.getDirectoryHandle("diagnostics", { create: true });
+  const fileHandle = await diagnosticsDirectory.getFileHandle(name, { create: true });
+  const writer = await fileHandle.createWritable();
+  await writer.write(content);
+  await writer.close();
+  return `diagnostics/${name}`;
+}
+
+async function saveDetectedSnapshot(html) {
+  try {
+    const saved = await writeDiagnosticFile(`rate-limit-detected-${Date.now()}.html`, html);
+    if (saved) log(`已保存限流现场快照：${saved}`);
+  } catch (error) {
+    log(`限流快照保存失败：${String(error)}`);
+  }
 }
 
 function openDb() {
@@ -198,20 +252,23 @@ async function flushQueue() {
   }
   if (!directoryHandle || writeQueue.length === 0) return;
   const batch = writeQueue.splice(0, 50);
+  let saved = 0;
   try {
-    const saved = await writeBatch(batch);
-    await chrome.runtime.sendMessage({
-      type: "WRITE_RESULT",
-      saved,
-      savedKeys: batch.map((post) => String(post.dedupe_key || post.post_id || "")),
-      errors: 0
-    });
-    log(`已写入${saved}条帖子。`);
+    saved = await writeBatch(batch);
   } catch (error) {
     writeQueue.unshift(...batch);
-    await chrome.runtime.sendMessage({ type: "WRITE_RESULT", saved: 0, errors: batch.length, savedKeys: [] });
+    await chrome.runtime.sendMessage({ type: "WRITE_RESULT", saved: 0, errors: batch.length, savedKeys: [] }).catch(() => {});
     log(`写入失败，已保留待重试队列：${String(error)}`);
+    if (writeQueue.length > 0) scheduleFlush();
+    return;
   }
+  await chrome.runtime.sendMessage({
+    type: "WRITE_RESULT",
+    saved,
+    savedKeys: batch.map((post) => String(post.dedupe_key || post.post_id || "")),
+    errors: 0
+  }).catch(() => {});
+  log(`已写入${saved}条帖子。`);
   if (writeQueue.length > 0) scheduleFlush();
 }
 
@@ -220,7 +277,12 @@ function scheduleFlush() {
 }
 
 async function drainPending() {
-  const response = await chrome.runtime.sendMessage({ type: "PEEK_PENDING" });
+  let response = null;
+  try {
+    response = await chrome.runtime.sendMessage({ type: "PEEK_PENDING" });
+  } catch (error) {
+    log(`读取后台缓存失败：${String(error)}`);
+  }
   if (response?.posts?.length) {
     writeQueue.push(...response.posts);
     log(`恢复${response.posts.length}条后台缓存帖子。`);
@@ -230,21 +292,32 @@ async function drainPending() {
 
 function renderState(state) {
   currentState = state;
-  const status = state.active ? "running" : state.paused ? "paused" : "idle";
-  ui.statusBadge.className = `badge ${status}`;
-  ui.statusBadge.textContent = status === "running" ? "采集中" : status === "paused" ? "已暂停" : "未开始";
+  if (state.active && state.rateLimitWaiting) {
+    ui.statusBadge.className = "badge waiting";
+    ui.statusBadge.textContent = "限流·自动重试中";
+  } else {
+    const status = state.active ? "running" : state.paused ? "paused" : "idle";
+    ui.statusBadge.className = `badge ${status}`;
+    ui.statusBadge.textContent = status === "running" ? "采集中" : status === "paused" ? "已暂停" : "未开始";
+  }
   ui.found.textContent = state.stats?.found || 0;
   ui.saved.textContent = state.stats?.saved || 0;
   ui.duplicate.textContent = state.stats?.duplicate || 0;
   ui.queued.textContent = Math.max(state.stats?.queued || 0, writeQueue.length);
   ui.errors.textContent = state.stats?.errors || 0;
+  ui.retries.textContent = state.stats?.retries || 0;
   ui.start.disabled = Boolean(state.active);
   ui.pause.disabled = !state.active;
   ui.stop.disabled = !state.active && !state.paused;
 }
 
 async function refreshTabs() {
-  const response = await chrome.runtime.sendMessage({ type: "GET_TABS" });
+  let response = null;
+  try {
+    response = await chrome.runtime.sendMessage({ type: "GET_TABS" });
+  } catch (error) {
+    log(`刷新标签页列表失败：${String(error)}`);
+  }
   const tabs = response?.tabs || [];
   const selected = currentState?.targetTabId;
   ui.targetTab.replaceChildren();
@@ -255,7 +328,7 @@ async function refreshTabs() {
     option.selected = tab.id === selected;
     ui.targetTab.append(option);
   }
-  if (!selected && tabs[0]) await chrome.runtime.sendMessage({ type: "SET_TARGET_TAB", tabId: tabs[0].id });
+  if (!selected && tabs[0]) await chrome.runtime.sendMessage({ type: "SET_TARGET_TAB", tabId: tabs[0].id }).catch(() => {});
 }
 
 ui.chooseDirectory.addEventListener("click", () => chooseDirectory().catch((error) => log(`选择目录失败：${String(error)}`)));
@@ -273,16 +346,27 @@ ui.start.addEventListener("click", async () => {
   } catch (error) { log(`开始失败：${String(error)}`); }
 });
 ui.pause.addEventListener("click", async () => {
-  const response = await chrome.runtime.sendMessage({ type: "PAUSE_SESSION" });
-  renderState(response.state);
-  log("采集已暂停。");
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "PAUSE_SESSION" });
+    renderState(response.state);
+    log("采集已暂停。");
+  } catch (error) {
+    log(`暂停失败：${String(error)}`);
+  }
 });
 ui.stop.addEventListener("click", async () => {
-  await flushQueue();
-  if (manifest) { manifest.status = "stopped"; await writeManifest(); }
-  const response = await chrome.runtime.sendMessage({ type: "STOP_SESSION" });
-  renderState(response.state);
-  log("采集已停止，文件已完成刷新。");
+  try {
+    await flushQueue();
+    if (manifest) {
+      manifest.status = "stopped";
+      await writeManifest().catch((error) => log(`清单写入失败：${String(error)}`));
+    }
+    const response = await chrome.runtime.sendMessage({ type: "STOP_SESSION" });
+    renderState(response.state);
+    log("采集已停止，文件已完成刷新。");
+  } catch (error) {
+    log(`停止失败：${String(error)}`);
+  }
 });
 ui.targetTab.addEventListener("change", async () => {
   try {
@@ -326,8 +410,54 @@ ui.autoScroll.addEventListener("change", async () => {
   }
 });
 
+ui.autoRetry.addEventListener("change", () => {
+  saveRetrySettings().catch((error) => log(`保存自动重试设置失败：${String(error)}`));
+});
+ui.retryBase.addEventListener("change", () => {
+  saveRetrySettings().catch((error) => log(`保存自动重试设置失败：${String(error)}`));
+});
+ui.retryMax.addEventListener("change", () => {
+  saveRetrySettings().catch((error) => log(`保存自动重试设置失败：${String(error)}`));
+});
+ui.simulateRateLimit.addEventListener("click", async () => {
+  try {
+    const tabId = Number(ui.targetTab.value) || undefined;
+    const response = await chrome.runtime.sendMessage({ type: "SIMULATE_RATE_LIMIT", tabId });
+    if (response?.ok && response.injected) log("已注入模拟限流UI，观察运行日志中的自动重试过程。");
+    else log(`模拟失败：${response?.error || "请先开始采集，并确认目标为X标签页。"}`);
+  } catch (error) {
+    log(`模拟失败：${String(error)}`);
+  }
+});
+ui.captureDiagnostics.addEventListener("click", async () => {
+  try {
+    const tabId = Number(ui.targetTab.value) || undefined;
+    const response = await chrome.runtime.sendMessage({ type: "CAPTURE_RATE_LIMIT_DIAGNOSTICS", tabId });
+    if (!response?.ok || !response.report) {
+      log(`诊断失败：${response?.error || "请确认已打开X标签页。"}`);
+      return;
+    }
+    const report = response.report;
+    log(`诊断：精确命中=${report.exact_match ? "是" : "否"}，疑似Retry候选=${report.loose_candidates.length}个，错误文案命中=${report.phrase_hits.length}处。`);
+    try {
+      const saved = await writeDiagnosticFile(`rate-limit-diag-${Date.now()}.json`, JSON.stringify(report, null, 2));
+      if (saved) log(`诊断详情已保存：${saved}`);
+      else log(`（未选择保存目录）诊断摘要：${JSON.stringify(report).slice(0, 700)}`);
+    } catch (error) {
+      log(`诊断文件写入失败：${String(error)}`);
+    }
+  } catch (error) {
+    log(`诊断失败：${String(error)}`);
+  }
+});
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "STATE") renderState(message.state);
+  if (message?.type === "RATE_LIMIT_EVENT") {
+    if (message.event?.text) log(message.event.text);
+    if (message.event?.snapshot) saveDetectedSnapshot(message.event.snapshot).catch(() => {});
+    if (message.state) renderState(message.state);
+  }
   if (message?.type === "POST_ACCEPTED") {
     writeQueue.push(message.post);
     renderState(message.state);
@@ -340,11 +470,28 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "SESSION_STOPPED" && manifest) { manifest.status = "stopped"; writeManifest().catch(() => {}); }
 });
 
+async function syncAutoScrollState() {
+  try {
+    const tabId = Number(ui.targetTab.value) || Number(currentState?.targetTabId) || 0;
+    if (!tabId) return;
+    const status = await chrome.runtime.sendMessage({ type: "GET_CONTENT_STATUS", tabId });
+    if (status?.ok) ui.autoScroll.checked = Boolean(status.autoScroll);
+  } catch (_error) {
+    // 状态同步失败不影响面板其它功能。
+  }
+}
+
 (async function init() {
-  await restoreDirectory();
-  const response = await chrome.runtime.sendMessage({ type: "GET_STATE" });
-  renderState(response.state);
-  await loadManifest(response.state.sessionId);
-  await refreshTabs();
-  if (response.state.active) await drainPending();
+  try {
+    await restoreDirectory();
+    await loadRetrySettings();
+    const response = await chrome.runtime.sendMessage({ type: "GET_STATE" });
+    renderState(response.state);
+    await loadManifest(response.state.sessionId);
+    await refreshTabs();
+    await syncAutoScrollState();
+    if (response.state.active) await drainPending();
+  } catch (error) {
+    log(`初始化失败：${String(error)}`);
+  }
 })();

@@ -1,0 +1,5 @@
+# Tool session storage (large outputs, session history) — not project source
+context/
+
+# macOS
+.DS_Store
