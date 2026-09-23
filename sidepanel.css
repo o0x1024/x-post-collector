@@ -7,7 +7,8 @@ h1 { margin: 0; font-size: 20px; }
 h2 { margin: 0 0 10px; font-size: 14px; }
 p { margin: 6px 0 0; }
 .muted, .hint, .path { color: #64748b; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; box-shadow: 0 2px 8px rgba(15, 23, 42, .04); }
+.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; box-shadow: 0 2px 8px rgba(15, 23, 42, .04); transition: box-shadow .25s ease, border-color .25s ease; }
+.card.attention { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, .22); }
 .badge { border-radius: 999px; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
 .badge.idle { background: #e2e8f0; color: #475569; }
 .badge.running { background: #dcfce7; color: #166534; }

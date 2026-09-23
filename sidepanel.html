@@ -11,16 +11,16 @@
       <header>
         <div>
           <h1>X帖子采集器</h1>
-          <p class="muted">Markdown版·图片本地嵌入·v0.2.0</p>
+          <p class="muted">Markdown版·图片本地嵌入·v0.2.4</p>
         </div>
         <span id="statusBadge" class="badge idle">未开始</span>
       </header>
 
-      <section class="card">
+      <section class="card" id="directoryCard">
         <h2>保存目录</h2>
         <button id="chooseDirectory" class="secondary">选择目录</button>
         <p id="directoryLabel" class="path">尚未选择目录</p>
-        <p class="hint">每条帖子会保存为Markdown，图片下载到media目录并嵌入Markdown。关闭侧栏后，后台最多缓存5000条等待写入。</p>
+        <p class="hint">每条帖子会保存为Markdown，图片下载到media目录并嵌入Markdown。关闭侧栏后，后台最多缓存5000条等待写入。未选择保存目录时无法开始采集。</p>
       </section>
 
       <section class="card controls">

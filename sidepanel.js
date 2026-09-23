@@ -6,6 +6,7 @@ const HANDLE_STORE = "handles";
 
 const ui = {
   chooseDirectory: document.querySelector("#chooseDirectory"),
+  directoryCard: document.querySelector("#directoryCard"),
   directoryLabel: document.querySelector("#directoryLabel"),
   start: document.querySelector("#start"),
   pause: document.querySelector("#pause"),
@@ -34,11 +35,27 @@ let writeQueue = [];
 let writeTimer = null;
 let partNumber = 0;
 let manifest = null;
+let directoryAlertTimer = null;
 const imageHostAllowlist = new Set(["pbs.twimg.com", "video.twimg.com", "abs.twimg.com"]);
 
 function log(message) {
   const line = `[${new Date().toLocaleTimeString()}] ${message}`;
   ui.log.textContent = `${line}\n${ui.log.textContent}`.slice(0, 4000);
+}
+
+function flagDirectoryNeeded() {
+  if (!ui.directoryCard) return;
+  ui.directoryCard.classList.add("attention");
+  if (directoryAlertTimer) window.clearTimeout(directoryAlertTimer);
+  directoryAlertTimer = window.setTimeout(() => ui.directoryCard.classList.remove("attention"), 3000);
+}
+
+function clearDirectoryAlert() {
+  if (directoryAlertTimer) {
+    window.clearTimeout(directoryAlertTimer);
+    directoryAlertTimer = null;
+  }
+  ui.directoryCard?.classList.remove("attention");
 }
 
 const SETTINGS_KEY = "xpcSettings";
@@ -130,6 +147,7 @@ async function chooseDirectory() {
   directoryHandle = handle;
   await saveHandle(handle);
   ui.directoryLabel.textContent = handle.name;
+  clearDirectoryAlert();
   log(`已选择目录：${handle.name}`);
   if (writeQueue.length > 0) scheduleFlush();
 }
@@ -145,6 +163,26 @@ async function restoreDirectory() {
   } catch (error) {
     log(`恢复目录失败：${String(error)}`);
   }
+}
+
+async function ensureDirectoryReady() {
+  if (!directoryHandle) {
+    log("尚未选择保存目录，无法开始采集：请先点击“选择目录”完成授权。");
+    flagDirectoryNeeded();
+    return false;
+  }
+  let granted = false;
+  try {
+    granted = await verifyPermission(directoryHandle, true);
+  } catch (_error) {
+    granted = false;
+  }
+  if (!granted) {
+    log("保存目录写入授权已失效，无法开始采集：请点击“选择目录”重新授权。");
+    flagDirectoryNeeded();
+    return false;
+  }
+  return true;
 }
 
 function sessionPrefix() {
@@ -334,7 +372,7 @@ async function refreshTabs() {
 ui.chooseDirectory.addEventListener("click", () => chooseDirectory().catch((error) => log(`选择目录失败：${String(error)}`)));
 ui.start.addEventListener("click", async () => {
   try {
-    if (!directoryHandle) await chooseDirectory();
+    if (!(await ensureDirectoryReady())) return;
     const response = await chrome.runtime.sendMessage({ type: "START_SESSION" });
     renderState(response.state);
     if (!manifest || manifest.session_id !== response.state.sessionId) {
